@@ -5,26 +5,26 @@ real-time and historical stock price queries for Amazon (AMZN), with document
 retrieval from Amazon's official financial reports.
 
 ## Architecture
-
 ```
 User (Jupyter Notebook)
     │
+    ▼ HTTPS POST + Cognito JWT
+API Gateway (HTTP API)
+    │ JWT validated automatically
     ▼
-AWS Cognito (JWT Authentication)
+Lambda Function (proxy)
     │
     ▼
-AWS Agentcore Runtime (Docker container ARM64)
+AWS Agentcore Runtime (Docker ARM64)
     │
     ▼
-FastAPI + BedrockAgentCoreApp
+FastAPI + LangGraph ReAct Agent (.astream())
     │
-    ├── LangGraph ReAct Agent (.astream())
-    │       ├── retrieve_realtime_stock_price (yfinance)
-    │       ├── retrieve_historical_stock_price (yfinance)
-    │       └── retrieve_from_knowledge_base (Bedrock KB)
+    ├── retrieve_realtime_stock_price (yfinance)
+    ├── retrieve_historical_stock_price (yfinance)
+    └── retrieve_from_knowledge_base (Bedrock KB + S3 Vectors)
     │
     ├── Amazon Bedrock — Claude Sonnet 4
-    ├── Amazon Bedrock Knowledge Base — S3 Vectors
     └── Langfuse — Observability
 ```
 
@@ -33,10 +33,11 @@ FastAPI + BedrockAgentCoreApp
 | Component | Technology |
 |-----------|-----------|
 | Agent Runtime | AWS Agentcore |
+| API Layer | AWS API Gateway (HTTP API) + Lambda |
 | Agent Orchestration | LangGraph (ReAct) + `.astream()` |
 | LLM | Claude Sonnet 4 via Amazon Bedrock |
 | Knowledge Base | Amazon Bedrock KB + S3 Vectors |
-| Authentication | AWS Cognito User Pool |
+| Authentication | AWS Cognito User Pool (JWT) |
 | Observability | Langfuse Cloud (free tier) |
 | Stock Data | yfinance |
 | Infrastructure | Terraform |
@@ -44,7 +45,6 @@ FastAPI + BedrockAgentCoreApp
 | Container | Docker ARM64 |
 
 ## Project Structure
-
 ```
 amzn-stock-agent/
 ├── app/
@@ -61,11 +61,14 @@ amzn-stock-agent/
 │   ├── bedrock_kb.tf     # S3 bucket for source PDFs
 │   ├── ecr.tf            # ECR repository
 │   ├── iam.tf            # IAM roles and policies
-│   └── agentcore.tf      # Agentcore notes
+│   ├── agentcore.tf      # Agentcore notes
+│   └── apigateway.tf     # API Gateway + Lambda proxy
+├── lambda/
+│   └── handler.py        # Lambda proxy to Agentcore
 ├── scripts/
 │   └── setup_kb.py       # Creates S3 Vectors + Bedrock KB via boto3
 ├── notebook/
-│   ├── demo.ipynb        # Demo notebook with all 5 queries
+│   ├── demo.ipynb        # Demo notebook — just run all cells
 │   └── screenshots/      # Langfuse trace screenshots
 ├── .env.example          # Environment variables template
 ├── Dockerfile            # ARM64 container
@@ -73,40 +76,53 @@ amzn-stock-agent/
 └── README.md
 ```
 
-## Prerequisites
+## Running the Demo Notebook (Evaluators)
 
-- AWS Account (free tier compatible)
-- AWS CLI configured (`aws configure`)
-- Terraform >= 1.5.0 — <https://developer.hashicorp.com/terraform/install>
-- Docker Desktop — <https://www.docker.com/products/docker-desktop>
+**No AWS credentials or infrastructure setup required.**
+The endpoint is already deployed and live.
+
+### Requirements
 - Python 3.10+
-- Git
+- `pip install boto3 requests`
 
-## Deployment Guide
+### Steps
+1. Open `notebook/demo.ipynb`
+2. Run **Kernel → Restart & Run All**
+3. All 5 queries will execute automatically
+
+> **Note:** Cognito tokens expire after 60 minutes. If you get
+> `Signature has expired`, re-run the authentication cell (Cell 2).
+
+---
+
+## Full Deployment Guide (Infrastructure Owners)
+
+Follow these steps to deploy the full infrastructure from scratch.
+
+### Prerequisites
+
+- AWS Account with CLI configured (`aws configure`)
+- Terraform >= 1.5.0 — https://developer.hashicorp.com/terraform/install
+- Docker Desktop — https://www.docker.com/products/docker-desktop
+- Python 3.10+
 
 ### Step 1 — Clone and configure
-
 ```bash
 git clone https://github.com/SDV244/AWS-STOCK-AGENT-Terraform.git
 cd AWS-STOCK-AGENT-Terraform
 
-# Create your env file
 cp .env.example .env
-
-# Install Python dependencies
 pip install -r requirements.txt
 ```
 
 ### Step 2 — Deploy infrastructure with Terraform
-
 ```bash
 cd terraform
 terraform init
 terraform apply
 ```
 
-After apply completes, run `terraform output` and copy the values to `.env`:
-
+After apply completes run `terraform output` and copy values to `.env`:
 ```
 cognito_user_pool_id  → COGNITO_USER_POOL_ID
 cognito_client_id     → COGNITO_CLIENT_ID
@@ -114,23 +130,23 @@ kb_s3_bucket          → KB_S3_BUCKET
 kb_s3_bucket_arn      → KB_S3_BUCKET_ARN
 bedrock_kb_role_arn   → BEDROCK_KB_ROLE_ARN
 ecr_repository_url    → used in Step 6
+api_gateway_url       → API_GATEWAY_URL
 ```
 
 ### Step 3 — Enable Bedrock Model Access
 
 1. Go to **AWS Console → Amazon Bedrock → Model Access**
-2. Click **Modify model access** and enable:
+2. Enable:
    - `Amazon Titan Embeddings V2`
    - `Anthropic Claude Sonnet 4`
 3. Wait until both show **Access granted**
 
 ### Step 4 — Setup Langfuse (free tier)
 
-1. Sign up at <https://cloud.langfuse.com>
-2. Create a project named `amzn-stock-agent`
-3. Go to **Settings → API Keys** → create a new key pair
+1. Sign up at https://cloud.langfuse.com
+2. Create project `amzn-stock-agent`
+3. Go to **Settings → API Keys** → create a key pair
 4. Add to `.env`:
-
 ```env
 LANGFUSE_PUBLIC_KEY=pk-lf-...
 LANGFUSE_SECRET_KEY=sk-lf-...
@@ -138,7 +154,6 @@ LANGFUSE_HOST=https://cloud.langfuse.com
 ```
 
 ### Step 5 — Upload PDFs and create Knowledge Base
-
 ```powershell
 # Download the 3 Amazon financial PDFs (PowerShell)
 $urls = @(
@@ -155,16 +170,14 @@ foreach ($url in $urls) {
 # Upload to S3
 aws s3 cp kb_docs\ s3://YOUR_KB_S3_BUCKET/ --recursive
 ```
-
 ```bash
 # Create S3 Vectors bucket + Bedrock Knowledge Base
 python scripts/setup_kb.py
 ```
 
-Copy `KNOWLEDGE_BASE_ID` from the generated `kb_outputs.json` into `.env`.
+Copy `KNOWLEDGE_BASE_ID` from `kb_outputs.json` into `.env`.
 
 ### Step 6 — Create Cognito test user
-
 ```bash
 aws cognito-idp admin-create-user \
   --user-pool-id YOUR_COGNITO_USER_POOL_ID \
@@ -186,18 +199,14 @@ aws cognito-idp admin-set-user-password \
 New AWS accounts have a default quota of 0 Agentcore runtimes.
 
 1. Go to **AWS Console → Service Quotas → Amazon Bedrock**
-2. Search `agent runtime` → click **Maximum number of agent runtimes**
+2. Search `agent runtime` → **Maximum number of agent runtimes**
 3. Request increase to `5`
 4. Wait for approval email (24-48 hours)
 
 ### Step 8 — Install AgentCore CLI and configure
-
 ```bash
 pip install bedrock-agentcore-starter-toolkit
-```
 
-```bash
-# Run from project root
 agentcore configure \
   -e app/main.py \
   --execution-role arn:aws:iam::YOUR_ACCOUNT_ID:role/amzn-stock-agent-agentcore-role \
@@ -205,14 +214,12 @@ agentcore configure \
 ```
 
 When prompted:
-
 - ECR repository → `amzn-stock-agent`
 - Requirements file → `requirements.txt`
 - OAuth → `no`
 - Memory → `no`
 
 ### Step 9 — Deploy to Agentcore
-
 ```bash
 agentcore deploy \
   --env AWS_REGION=us-east-1 \
@@ -225,25 +232,20 @@ agentcore deploy \
 ```
 
 Wait until status is `READY`:
-
 ```bash
 aws bedrock-agentcore-control list-agent-runtimes --region us-east-1
 ```
 
-Copy the `agentRuntimeArn` from the output.
+### Step 10 — Update notebook with your values
 
-### Step 10 — Run the demo notebook
-
-```bash
-cd notebook
-jupyter notebook demo.ipynb
+Update these variables in `notebook/demo.ipynb` Cell 1:
+```python
+API_GATEWAY_URL      = "YOUR_API_GATEWAY_URL/prod"
+COGNITO_USER_POOL_ID = "YOUR_VALUE"
+COGNITO_CLIENT_ID    = "YOUR_VALUE"
 ```
 
-Update `AGENT_RUNTIME_ARN` in Cell 4 with your runtime ARN from Step 9.
-Run all cells in order with **Kernel → Restart & Run All**.
-
-> **Note:** Cognito tokens expire after 60 minutes. Re-run the authentication
-> cell if you get `Signature has expired` errors.
+Then run **Kernel → Restart & Run All**.
 
 ## Queries Demonstrated
 
@@ -257,35 +259,38 @@ Run all cells in order with **Kernel → Restart & Run All**.
 
 ## Environment Variables
 
-| Variable | Description |
-|----------|-------------|
-| `AWS_REGION` | AWS region (us-east-1) |
-| `COGNITO_USER_POOL_ID` | Cognito User Pool ID from Terraform output |
-| `COGNITO_CLIENT_ID` | Cognito App Client ID from Terraform output |
-| `KNOWLEDGE_BASE_ID` | Bedrock KB ID from `kb_outputs.json` |
-| `KB_S3_BUCKET` | S3 bucket name for PDFs from Terraform output |
-| `KB_S3_BUCKET_ARN` | S3 bucket ARN from Terraform output |
-| `BEDROCK_KB_ROLE_ARN` | IAM role ARN for Bedrock KB from Terraform output |
-| `BEDROCK_MODEL_ID` | `us.anthropic.claude-sonnet-4-20250514-v1:0` |
-| `LANGFUSE_PUBLIC_KEY` | From Langfuse project settings |
-| `LANGFUSE_SECRET_KEY` | From Langfuse project settings |
-| `LANGFUSE_HOST` | `https://cloud.langfuse.com` |
+| Variable | Description | Source |
+|----------|-------------|--------|
+| `AWS_REGION` | AWS region | `us-east-1` |
+| `COGNITO_USER_POOL_ID` | Cognito User Pool ID | Terraform output |
+| `COGNITO_CLIENT_ID` | Cognito App Client ID | Terraform output |
+| `KNOWLEDGE_BASE_ID` | Bedrock KB ID | `kb_outputs.json` |
+| `KB_S3_BUCKET` | S3 bucket for PDFs | Terraform output |
+| `KB_S3_BUCKET_ARN` | S3 bucket ARN | Terraform output |
+| `BEDROCK_KB_ROLE_ARN` | IAM role for Bedrock KB | Terraform output |
+| `BEDROCK_MODEL_ID` | Bedrock inference profile | `us.anthropic.claude-sonnet-4-20250514-v1:0` |
+| `LANGFUSE_PUBLIC_KEY` | Langfuse public key | Langfuse dashboard |
+| `LANGFUSE_SECRET_KEY` | Langfuse secret key | Langfuse dashboard |
+| `LANGFUSE_HOST` | Langfuse host | `https://cloud.langfuse.com` |
 
-## Known Issues & Solutions
+## Known Issues and Solutions
 
 | Issue | Solution |
 |-------|----------|
-| `SubscriptionRequiredException` on OpenSearch | Use S3 Vectors instead (already configured) |
+| `SubscriptionRequiredException` on OpenSearch | Project uses S3 Vectors instead |
 | `ServiceQuotaExceededException` on Agentcore | Request quota increase (Step 7) |
 | `Signature has expired` in notebook | Re-run authentication cell |
 | Model marked as Legacy | Use `us.anthropic.claude-sonnet-4-*` inference profile |
 | Docker Hub rate limit in CodeBuild | Dockerfile uses `public.ecr.aws` mirror |
+| Terraform does not support S3 Vectors as Bedrock KB backend | Use `scripts/setup_kb.py` instead |
 
 ## Cost Estimate
 
 | Service | Estimated Monthly Cost |
 |---------|----------------------|
 | Agentcore Runtime | ~$0 (pay per invocation) |
+| API Gateway | ~$0 (1M requests free) |
+| Lambda | ~$0 (1M invocations free) |
 | S3 Vectors | ~$0 (pay per query) |
 | Bedrock Claude Sonnet 4 | ~$0.01 per 1K tokens |
 | Cognito | Free (50K MAU free tier) |
