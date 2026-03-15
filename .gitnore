@@ -1,0 +1,27 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+*.egg-info/
+dist/
+build/
+
+# Terraform state (contains sensitive data)
+terraform/.terraform/
+terraform/*.tfstate
+terraform/*.tfstate.backup
+terraform/.terraform.lock.hcl
+
+# Jupyter checkpoints
+.ipynb_checkpoints/
+
+# AWS
+.aws/
+
+# OS
+.DS_Store
+Thumbs.db
