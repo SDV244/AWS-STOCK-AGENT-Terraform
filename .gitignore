@@ -1,19 +1,29 @@
-
-terraform/.terraform/
-terraform/.terraform.lock.hcl
-
+# Python & Environment
+.venv/
+__pycache__/
+*.pyc
 .env
 
+# Terraform
+terraform/.terraform/
+terraform/.terraform.lock.hcl
+*.tfstate
+*.tfstate.backup
+
+# Bedrock Agentcore - Configs Locales (No subir al repo)
+artifact.json
+env-config.json
+jwt-auth.json
+network.json
 evaluator-policy.json
-
 final-policy.json
-
 temp-policy.json
 
+# Logs y Archivos temporales
+history.txt
+logs.txt
+.bedrock_agentcore/
+
+# Tests locales
 test_local.py
-
 local_test.py
-
-*.tfstate
-
-*.tfstate.backup

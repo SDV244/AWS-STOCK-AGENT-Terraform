@@ -202,8 +202,9 @@ async def invoke(payload: dict) -> dict:
     if token.startswith("Bearer "):
         token = token[7:]
 
-    # Only validate manually if token provided in payload
-    # When using JWT Inbound Auth, Agentcore validates before calling this
+    # Con JWT Inbound Auth configurado, Agentcore valida el token
+    # antes de llamar este entrypoint — no necesitamos revalidar
+    # Solo validamos si el token viene explícitamente en el payload
     if token and token != "SKIP":
         try:
             verify_token_sync(token)
