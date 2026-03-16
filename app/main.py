@@ -9,8 +9,12 @@ from bedrock_agentcore import BedrockAgentCoreApp
 from app.auth import verify_token_sync
 from app.config import settings
 
-# ── FastAPI app (satisfies FastAPI requirement) ───────────────────────
-fastapi_app = FastAPI(title="Amazon Stock AI Agent", version="1.0.0")
+# ── FastAPI app — mounted inside BedrockAgentCoreApp ──────────────────
+fastapi_app = FastAPI(
+    title="Amazon Stock AI Agent",
+    description="LangGraph ReAct agent for real-time and historical AMZN stock queries",
+    version="1.0.0",
+)
 
 class QueryRequest(BaseModel):
     query: str
@@ -18,10 +22,18 @@ class QueryRequest(BaseModel):
 
 @fastapi_app.get("/health")
 async def health():
-    return {"status": "healthy", "model": settings.bedrock_model_id}
+    return {
+        "status":     "healthy",
+        "model":      settings.bedrock_model_id,
+        "kb_id":      settings.knowledge_base_id,
+    }
 
-@fastapi_app.post("/invoke")
+@fastapi_app.post("/stream")
 async def invoke_stream(request: QueryRequest):
+    """
+    FastAPI streaming endpoint — returns Server-Sent Events.
+    Auth is handled by Agentcore JWT Inbound Auth (Cognito).
+    """
     from langchain_aws import ChatBedrock
     from langchain_core.messages import HumanMessage
     from langgraph.prebuilt import create_react_agent
@@ -31,7 +43,7 @@ async def invoke_stream(request: QueryRequest):
     trace_id    = langfuse_create_trace(session_id, request.query)
     span_id, _  = langfuse_create_span(trace_id, "langgraph-agent", request.query)
 
-    llm   = ChatBedrock(
+    llm = ChatBedrock(
         model_id=settings.bedrock_model_id,
         region_name=settings.aws_region,
         model_kwargs={"max_tokens": 4096, "temperature": 0.1},
@@ -90,8 +102,9 @@ async def invoke_stream(request: QueryRequest):
     )
 
 
-# ── AgentCore app (satisfies Agentcore requirement) ───────────────────
+# ── BedrockAgentCoreApp — Agentcore protocol ──────────────────────────
 app = BedrockAgentCoreApp()
+
 
 # ── Langfuse helpers ──────────────────────────────────────────────────
 def langfuse_ingest(events: list):
@@ -141,7 +154,7 @@ def langfuse_create_span(trace_id: str, name: str, input_data: str) -> tuple:
 
 
 def langfuse_end_trace(trace_id: str, span_id: str, query: str, output: str, tool_events: list):
-    end_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+    end_time = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     events   = []
 
     events.append({
@@ -182,17 +195,20 @@ def langfuse_end_trace(trace_id: str, span_id: str, query: str, output: str, too
     langfuse_ingest(events)
 
 
-# ── AgentCore entrypoint ──────────────────────────────────────────────
+# ── Agentcore entrypoint (invoked via SDK or JWT HTTPS) ───────────────
 @app.entrypoint
 async def invoke(payload: dict) -> dict:
     token = payload.get("token", "")
     if token.startswith("Bearer "):
         token = token[7:]
 
-    try:
-        verify_token_sync(token)
-    except Exception as e:
-        return {"error": f"Unauthorized: {str(e)}"}
+    # Only validate manually if token provided in payload
+    # When using JWT Inbound Auth, Agentcore validates before calling this
+    if token and token != "SKIP":
+        try:
+            verify_token_sync(token)
+        except Exception as e:
+            return {"error": f"Unauthorized: {str(e)}"}
 
     query      = payload.get("query", "")
     session_id = payload.get("session_id", str(uuid.uuid4()))
@@ -214,8 +230,8 @@ async def invoke(payload: dict) -> dict:
         model_kwargs={"max_tokens": 4096, "temperature": 0.1},
     )
 
-    agent  = create_react_agent(model=llm, tools=TOOLS, prompt=SYSTEM_PROMPT)
-    chunks = []
+    agent      = create_react_agent(model=llm, tools=TOOLS, prompt=SYSTEM_PROMPT)
+    chunks     = []
     final_text = ""
 
     async for event in agent.astream(

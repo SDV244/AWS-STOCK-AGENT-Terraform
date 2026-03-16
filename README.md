@@ -82,6 +82,7 @@ amzn-stock-agent/
 The endpoint is already deployed and live.
 
 ### Requirements
+<<<<<<< Updated upstream
 - Python 3.10+
 - `pip install boto3 requests`
 
@@ -105,6 +106,33 @@ Follow these steps to deploy the full infrastructure from scratch.
 - Terraform >= 1.5.0 — https://developer.hashicorp.com/terraform/install
 - Docker Desktop — https://www.docker.com/products/docker-desktop
 - Python 3.10+
+=======
+
+- Python 3.10+
+- `pip install boto3 requests`
+
+### Steps
+
+1. Open `notebook/demo.ipynb`
+2. Run **Kernel → Restart & Run All**
+3. All 5 queries will execute automatically
+
+> **Note:** Cognito tokens expire after 60 minutes. If you get
+> `Signature has expired`, re-run the authentication cell (Cell 2).
+
+---
+
+## Full Deployment Guide (Infrastructure Owners)
+
+Follow these steps to deploy the full infrastructure from scratch.
+
+### Prerequisites
+
+- AWS Account with CLI configured (`aws configure`)
+- Terraform >= 1.5.0 — <https://developer.hashicorp.com/terraform/install>
+- Docker Desktop — <https://www.docker.com/products/docker-desktop>
+- Python 3.10+
+>>>>>>> Stashed changes
 
 ### Step 1 — Clone and configure
 ```bash
@@ -123,6 +151,10 @@ terraform apply
 ```
 
 After apply completes run `terraform output` and copy values to `.env`:
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 ```
 cognito_user_pool_id  → COGNITO_USER_POOL_ID
 cognito_client_id     → COGNITO_CLIENT_ID
@@ -143,7 +175,11 @@ api_gateway_url       → API_GATEWAY_URL
 
 ### Step 4 — Setup Langfuse (free tier)
 
+<<<<<<< Updated upstream
 1. Sign up at https://cloud.langfuse.com
+=======
+1. Sign up at <https://cloud.langfuse.com>
+>>>>>>> Stashed changes
 2. Create project `amzn-stock-agent`
 3. Go to **Settings → API Keys** → create a key pair
 4. Add to `.env`:
@@ -239,6 +275,10 @@ aws bedrock-agentcore-control list-agent-runtimes --region us-east-1
 ### Step 10 — Update notebook with your values
 
 Update these variables in `notebook/demo.ipynb` Cell 1:
+<<<<<<< Updated upstream
+=======
+
+>>>>>>> Stashed changes
 ```python
 API_GATEWAY_URL      = "YOUR_API_GATEWAY_URL/prod"
 COGNITO_USER_POOL_ID = "YOUR_VALUE"
