@@ -1,4 +1,4 @@
-# ── Agentcore execution role ──────────────────────────────────────────────────
+# ── Agentcore execution role ──────────────────────────────────────────
 resource "aws_iam_role" "agentcore_execution_role" {
   name = "${var.project_name}-agentcore-role"
 
@@ -9,24 +9,66 @@ resource "aws_iam_role" "agentcore_execution_role" {
         Effect    = "Allow"
         Principal = { Service = "bedrock.amazonaws.com" }
         Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       },
       {
         Effect    = "Allow"
         Principal = { Service = "bedrock-agentcore.amazonaws.com" }
         Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy" "agentcore_ecr_policy" {
-  name = "agentcore-ecr-policy"
+resource "aws_iam_role_policy" "agentcore_bedrock_policy" {
+  name = "agentcore-bedrock-least-privilege"
   role = aws_iam_role.agentcore_execution_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "InvokeBedrockModels"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel",
+          "bedrock:InvokeModelWithResponseStream",
+          "bedrock:Converse",
+          "bedrock:ConverseStream"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "RetrieveFromKnowledgeBase"
+        Effect = "Allow"
+        Action = [
+          "bedrock:Retrieve",
+          "bedrock:RetrieveAndGenerate",
+          "bedrock:GetKnowledgeBase",
+          "bedrock:ListKnowledgeBases"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "S3ReadSourceDocs"
+        Effect = "Allow"
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "ECRPullImage"
         Effect = "Allow"
         Action = [
           "ecr:GetAuthorizationToken",
@@ -35,22 +77,34 @@ resource "aws_iam_role_policy" "agentcore_ecr_policy" {
           "ecr:BatchCheckLayerAvailability"
         ]
         Resource = "*"
+      },
+      {
+        Sid    = "CloudWatchLogs"
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "*"
+      },
+      {
+        Sid    = "S3VectorsQuery"
+        Effect = "Allow"
+        Action = [
+          "s3vectors:QueryVectors",
+          "s3vectors:GetVectors",
+          "s3vectors:ListVectors",
+          "s3vectors:GetIndex",
+          "s3vectors:GetVectorBucket"
+        ]
+        Resource = "*"
       }
     ]
   })
 }
 
-resource "aws_iam_role_policy_attachment" "bedrock_full" {
-  role       = aws_iam_role.agentcore_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonBedrockFullAccess"
-}
-
-resource "aws_iam_role_policy_attachment" "s3_read" {
-  role       = aws_iam_role.agentcore_execution_role.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess"
-}
-
-# ── Bedrock Knowledge Base role ───────────────────────────────────────────────
+# ── Bedrock Knowledge Base role ───────────────────────────────────────
 resource "aws_iam_role" "bedrock_kb_role" {
   name = "${var.project_name}-kb-role"
 
@@ -61,41 +115,73 @@ resource "aws_iam_role" "bedrock_kb_role" {
         Effect    = "Allow"
         Principal = { Service = "bedrock.amazonaws.com" }
         Action    = "sts:AssumeRole"
+        Condition = {
+          StringEquals = {
+            "aws:SourceAccount" = data.aws_caller_identity.current.account_id
+          }
+        }
       }
     ]
   })
 }
 
 resource "aws_iam_role_policy" "kb_policy" {
-  name = "kb-access-policy"
+  name = "kb-least-privilege"
   role = aws_iam_role.bedrock_kb_role.id
 
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
       {
+        Sid    = "ReadSourceDocuments"
         Effect = "Allow"
-        Action = ["s3:GetObject", "s3:ListBucket"]
+        Action = [
+          "s3:GetObject",
+          "s3:ListBucket"
+        ]
         Resource = [
           aws_s3_bucket.kb_docs.arn,
           "${aws_s3_bucket.kb_docs.arn}/*"
         ]
       },
       {
-        Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel", "bedrock:ListFoundationModels"]
-        Resource = "*"
+        Sid    = "InvokeTitanEmbeddings"
+        Effect = "Allow"
+        Action = [
+          "bedrock:InvokeModel"
+        ]
+        Resource = "arn:aws:bedrock:${var.aws_region}::foundation-model/amazon.titan-embed-text-v2:0"
       },
       {
-        Effect   = "Allow"
-        Action   = ["s3vectors:*"]
-        Resource = "*"
+        Sid    = "S3VectorsAccess"
+        Effect = "Allow"
+        Action = [
+          "s3vectors:CreateIndex",
+          "s3vectors:GetIndex",
+          "s3vectors:DeleteIndex",
+          "s3vectors:PutVectors",
+          "s3vectors:GetVectors",
+          "s3vectors:DeleteVectors",
+          "s3vectors:QueryVectors",
+          "s3vectors:ListVectors"
+        ]
+        Resource = "arn:aws:s3vectors:${var.aws_region}:${data.aws_caller_identity.current.account_id}:bucket/${var.project_name}-vectors/*"
+      },
+      {
+        Sid    = "S3VectorsBucketAccess"
+        Effect = "Allow"
+        Action = [
+          "s3vectors:GetVectorBucket",
+          "s3vectors:ListIndexes"
+        ]
+        Resource = "arn:aws:s3vectors:${var.aws_region}:${data.aws_caller_identity.current.account_id}:bucket/${var.project_name}-vectors"
       }
     ]
   })
 }
 
-# ── Outputs ───────────────────────────────────────────────────────────────────
+
+# ── Outputs ───────────────────────────────────────────────────────────
 output "agentcore_role_arn" {
   value = aws_iam_role.agentcore_execution_role.arn
 }
