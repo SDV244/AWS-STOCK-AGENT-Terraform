@@ -3,3 +3,17 @@ terraform/.terraform/
 terraform/.terraform.lock.hcl
 
 .env
+
+evaluator-policy.json
+
+final-policy.json
+
+temp-policy.json
+
+test_local.py
+
+local_test.py
+
+*.tfstate
+
+*.tfstate.backup
